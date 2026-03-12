@@ -1,0 +1,13 @@
+interface:
+  display_name: "Deep Research"
+  short_description: "Verified multi-source research reports"
+  default_prompt: "Use $deep-research to investigate a topic with multiple sources, verify key claims, and deliver a structured research report."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "tavily"
+      description: "Tavily MCP tools for search, extraction, crawl, and research synthesis"
+
+policy:
+  allow_implicit_invocation: true
