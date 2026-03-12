@@ -55,7 +55,7 @@ The default operating pattern is:
 
 ## Phase 3: Retrieve
 
-**Objective:** Collect evidence quickly and systematically using Tavily-first retrieval.
+**Objective:** Collect evidence quickly and systematically using source-class routing plus targeted retrieval.
 
 **Core rule:** Decompose the question into 5-10 independent search angles before launching any search calls, then launch the initial search batch in one assistant message with multiple Tavily tool calls.
 
@@ -72,6 +72,20 @@ Cover as many of these angles as the topic warrants:
 7. Industry or market context
 8. Failure modes, limitations, and edge cases
 
+### Source-Class Routing
+
+Do not treat every topic as a Tavily fan-out problem.
+
+- Official guidelines, regulators, and standards:
+  - route to official sources first
+  - use domain-constrained search only when the official page is unknown
+- Primary papers:
+  - prefer direct paper records, PubMed/PMC, DOI pages, or official journal pages
+- Broad or noisy topics:
+  - use Tavily search fan-out, then extract
+- Structured sites:
+  - use map or crawl
+
 ### Tavily Tool Selection
 
 Use the narrowest Tavily tool that matches the step:
@@ -83,12 +97,29 @@ Use the narrowest Tavily tool that matches the step:
   - Use after shortlist creation.
   - Pull detailed page content from 5-10 promising URLs.
 - `mcp__tavily__tavily_research`
-  - Use when the topic is broad, noisy, or spans many subtopics.
+  - Use only after search/extract when the topic is still broad, noisy, or spans many subtopics.
   - Treat it as a synthesis seed, not as a replacement for independent verification.
 - `mcp__tavily__tavily_map` or `mcp__tavily__tavily_crawl`
   - Use for structured site exploration such as standards bodies, product docs, or agency portals.
 
 Fallback to generic browsing only if Tavily is unavailable or clearly cannot cover the needed source class.
+
+### Retrieval Failure Fallback Order
+
+If a retrieval step fails:
+
+1. Retry with a narrower query.
+2. Remove brittle or unsupported parameters.
+3. Switch to an official-source search.
+4. Switch to direct page extraction.
+5. Switch to generic browsing only when necessary.
+
+### Tool Quirks to Expect
+
+- Some Tavily parameters are strict and rejected instead of ignored.
+- Broad synthesis calls may time out.
+- Some pages reject `HEAD` while allowing `GET`.
+- Some publisher pages block bots and require alternate records such as PubMed or PMC.
 
 ### Parallel Execution Protocol
 
@@ -101,6 +132,7 @@ Fallback to generic browsing only if Tavily is unavailable or clearly cannot cov
 3. Shortlist sources as results arrive.
 4. Run `tavily_extract` on the shortlisted URLs.
 5. Track gaps and launch targeted follow-up searches only where evidence is still weak.
+6. Maintain a source ledger with citation number, source type, URL, access status, verification status, publication date, and intended claims supported.
 
 ### Example Search Batch
 

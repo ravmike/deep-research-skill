@@ -1,430 +1,395 @@
 #!/usr/bin/env python3
 """
-Citation Verification Script (Enhanced with CiteGuard techniques)
+Citation verification for deep-research reports.
 
-Catches fabricated citations by checking:
-1. DOI resolution (via doi.org)
-2. Basic metadata matching (title similarity, year match)
-3. URL accessibility verification
-4. Hallucination pattern detection (generic titles, suspicious patterns)
-5. Flags suspicious entries for manual review
+Checks citations by combining:
+1. DOI metadata resolution
+2. URL accessibility checks with HEAD -> GET fallback
+3. Basic metadata matching
+4. Hallucination-pattern detection
 
-Enhanced in 2025 with:
-- Content alignment checking (when URL available)
-- Multi-source verification (DOI + URL + metadata cross-check)
-- Advanced hallucination detection patterns
-- Better false positive reduction
-
-Usage:
-    python verify_citations.py --report [path]
-    python verify_citations.py --report [path] --strict  # Fail on any unverified
-
-Does NOT require API keys - uses free DOI resolver and heuristics.
+This verifier is intentionally conservative about failed access:
+- it distinguishes network problems from publisher blocking
+- it treats GET success after HEAD failure as verified
+- it reports failure categories so the caller can decide whether to
+  swap in an alternate URL such as PubMed or PMC
 """
 
-import sys
+from __future__ import annotations
+
 import argparse
-import re
-from pathlib import Path
-from typing import List, Dict, Tuple
-from urllib import request, error
-from urllib.parse import quote
 import json
+import re
+import sys
 import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from urllib import error, request
+from urllib.parse import quote, urlparse
+
+
+USER_AGENT = "Mozilla/5.0 (Deep Research Citation Verifier)"
+RECOVERABLE_HEAD_CODES = {403, 405}
+SUCCESS_CODES = set(range(200, 400))
+
+
+@dataclass
+class VerificationResult:
+    num: str
+    status: str = "unknown"
+    category: str = "unknown"
+    issues: List[str] = field(default_factory=list)
+    verification_methods: List[str] = field(default_factory=list)
+    metadata: Dict[str, object] = field(default_factory=dict)
+
 
 class CitationVerifier:
-    """Verify citations in research report"""
+    """Verify bibliography entries in a markdown research report."""
 
     def __init__(self, report_path: Path, strict_mode: bool = False):
         self.report_path = report_path
         self.strict_mode = strict_mode
         self.content = self._read_report()
-        self.suspicious = []
-        self.verified = []
-        self.errors = []
-
-        # Hallucination detection patterns (2025 CiteGuard enhancement)
+        self.current_year = datetime.now().year
         self.suspicious_patterns = [
-            # Generic academic-sounding but fake patterns
-            (r'^(A |An |The )?(Study|Analysis|Review|Survey|Investigation) (of|on|into)',
-             "Generic academic title pattern"),
-            (r'^(Recent|Current|Modern|Contemporary) (Advances|Developments|Trends) in',
-             "Generic 'advances' title pattern"),
-            # Too perfect, templated titles
-            (r'^[A-Z][a-z]+ [A-Z][a-z]+: A (Comprehensive|Complete|Systematic) (Review|Analysis|Guide)$',
-             "Too perfect, templated structure"),
+            (
+                r"^(A |An |The )?(Study|Analysis|Review|Survey|Investigation) (of|on|into)",
+                "Generic academic title pattern",
+            ),
+            (
+                r"^(Recent|Current|Modern|Contemporary) (Advances|Developments|Trends) in",
+                "Generic 'advances' title pattern",
+            ),
+            (
+                r"^[A-Z][a-z]+ [A-Z][a-z]+: A (Comprehensive|Complete|Systematic) (Review|Analysis|Guide)$",
+                "Too perfect, templated structure",
+            ),
         ]
 
     def _read_report(self) -> str:
-        """Read report file"""
         try:
-            with open(self.report_path, 'r', encoding='utf-8') as f:
-                return f.read()
-        except Exception as e:
-            print(f"L ERROR: Cannot read report: {e}")
+            return self.report_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            print(f"ERROR: cannot read report: {exc}")
             sys.exit(1)
 
-    def extract_bibliography(self) -> List[Dict]:
-        """Extract bibliography entries from report"""
-        pattern = r'## Bibliography(.*?)(?=##|\Z)'
+    def extract_bibliography(self) -> List[Dict[str, Optional[str]]]:
+        pattern = r"## Bibliography(.*?)(?=##|\Z)"
         match = re.search(pattern, self.content, re.DOTALL | re.IGNORECASE)
-
         if not match:
-            self.errors.append("No Bibliography section found")
             return []
 
-        bib_section = match.group(1)
+        entries: List[Dict[str, Optional[str]]] = []
+        current_entry: Optional[Dict[str, Optional[str]]] = None
 
-        # Parse entries: [N] Author (Year). "Title". Venue. URL
-        entries = []
-        lines = bib_section.strip().split('\n')
-
-        current_entry = None
-        for line in lines:
-            line = line.strip()
+        for raw_line in match.group(1).strip().splitlines():
+            line = raw_line.strip()
             if not line:
                 continue
 
-            # Check if starts with citation number [N]
-            match_num = re.match(r'^\[(\d+)\]\s+(.+)$', line)
+            match_num = re.match(r"^\[(\d+)\]\s+(.+)$", line)
             if match_num:
                 if current_entry:
                     entries.append(current_entry)
 
                 num = match_num.group(1)
                 rest = match_num.group(2)
-
-                # Try to parse: Author (Year). "Title". Venue. URL
-                year_match = re.search(r'\((\d{4})\)', rest)
+                year_match = re.search(r"\((\d{4})\)", rest)
                 title_match = re.search(r'"([^"]+)"', rest)
-                doi_match = re.search(r'doi\.org/(10\.\S+)', rest)
-                url_match = re.search(r'https?://[^\s\)]+', rest)
-
+                doi_match = re.search(r"(?:doi\.org/|doi:\s*)(10\.\S+?)(?:\s|$)", rest, re.IGNORECASE)
+                url_match = re.search(r"https?://[^\s\)]+", rest)
                 current_entry = {
-                    'num': num,
-                    'raw': rest,
-                    'year': year_match.group(1) if year_match else None,
-                    'title': title_match.group(1) if title_match else None,
-                    'doi': doi_match.group(1) if doi_match else None,
-                    'url': url_match.group(0) if url_match else None
+                    "num": num,
+                    "raw": rest,
+                    "year": year_match.group(1) if year_match else None,
+                    "title": title_match.group(1) if title_match else None,
+                    "doi": doi_match.group(1).rstrip(").,") if doi_match else None,
+                    "url": url_match.group(0).rstrip(").,") if url_match else None,
                 }
             elif current_entry:
-                # Multi-line entry, append to raw
-                current_entry['raw'] += ' ' + line
+                current_entry["raw"] = f"{current_entry['raw']} {line}"
 
         if current_entry:
             entries.append(current_entry)
 
         return entries
 
-    def verify_doi(self, doi: str) -> Tuple[bool, Dict]:
-        """
-        Verify DOI exists and get metadata.
-        Returns (success, metadata_dict)
-        """
+    def verify_doi(self, doi: str) -> Tuple[bool, Dict[str, object]]:
         if not doi:
             return False, {}
 
         try:
-            # Use content negotiation to get JSON metadata
-            url = f"https://doi.org/{quote(doi)}"
-            req = request.Request(url)
-            req.add_header('Accept', 'application/vnd.citationstyles.csl+json')
+            req = request.Request(f"https://doi.org/{quote(doi)}")
+            req.add_header("Accept", "application/vnd.citationstyles.csl+json")
+            req.add_header("User-Agent", USER_AGENT)
+            with request.urlopen(req, timeout=15) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            return True, {
+                "title": data.get("title", ""),
+                "year": data.get("issued", {}).get("date-parts", [[None]])[0][0],
+                "authors": [
+                    f"{author.get('family', '')} {author.get('given', '')}".strip()
+                    for author in data.get("author", [])
+                ],
+                "venue": data.get("container-title", ""),
+            }
+        except error.HTTPError as exc:
+            category = "doi_not_found" if exc.code == 404 else "doi_http_error"
+            return False, {"error": f"HTTP {exc.code}", "category": category}
+        except error.URLError as exc:
+            return False, {"error": str(exc.reason), "category": "network_error"}
+        except Exception as exc:
+            return False, {"error": str(exc), "category": "unknown_error"}
 
-            with request.urlopen(req, timeout=10) as response:
-                data = json.loads(response.read().decode('utf-8'))
-
-                return True, {
-                    'title': data.get('title', ''),
-                    'year': data.get('issued', {}).get('date-parts', [[None]])[0][0],
-                    'authors': [
-                        f"{a.get('family', '')} {a.get('given', '')}"
-                        for a in data.get('author', [])
-                    ],
-                    'venue': data.get('container-title', '')
-                }
-        except error.HTTPError as e:
-            if e.code == 404:
-                return False, {'error': 'DOI not found (404)'}
-            return False, {'error': f'HTTP {e.code}'}
-        except Exception as e:
-            return False, {'error': str(e)}
-
-    def verify_url(self, url: str) -> Tuple[bool, str]:
-        """
-        Verify URL is accessible (2025 CiteGuard enhancement).
-        Returns (accessible, status_message)
-        """
-        if not url:
-            return False, "No URL"
+    def _open_url(self, url: str, method: str) -> Tuple[bool, Dict[str, object]]:
+        req = request.Request(url, method=method)
+        req.add_header("User-Agent", USER_AGENT)
 
         try:
-            # HEAD request to check accessibility without downloading
-            req = request.Request(url, method='HEAD')
-            req.add_header('User-Agent', 'Mozilla/5.0 (Research Citation Verifier)')
+            with request.urlopen(req, timeout=15) as response:
+                return True, {
+                    "status_code": response.status,
+                    "final_url": response.geturl(),
+                    "method": method,
+                    "category": "ok",
+                }
+        except error.HTTPError as exc:
+            return False, {
+                "status_code": exc.code,
+                "final_url": url,
+                "method": method,
+                "category": self._categorize_http_failure(exc.code),
+                "error": f"HTTP {exc.code}",
+            }
+        except error.URLError as exc:
+            return False, {
+                "status_code": None,
+                "final_url": url,
+                "method": method,
+                "category": "network_error",
+                "error": f"URL error: {exc.reason}",
+            }
+        except Exception as exc:
+            return False, {
+                "status_code": None,
+                "final_url": url,
+                "method": method,
+                "category": "unknown_error",
+                "error": f"Connection error: {str(exc)[:80]}",
+            }
 
-            with request.urlopen(req, timeout=10) as response:
-                if response.status == 200:
-                    return True, "URL accessible"
-                else:
-                    return False, f"HTTP {response.status}"
-        except error.HTTPError as e:
-            return False, f"HTTP {e.code}"
-        except error.URLError as e:
-            return False, f"URL error: {e.reason}"
-        except Exception as e:
-            return False, f"Connection error: {str(e)[:50]}"
+    def _categorize_http_failure(self, status_code: int) -> str:
+        if status_code == 401:
+            return "auth_required"
+        if status_code == 403:
+            return "publisher_blocked"
+        if status_code == 404:
+            return "not_found"
+        if status_code == 405:
+            return "method_not_allowed"
+        if 500 <= status_code <= 599:
+            return "server_error"
+        return "http_error"
 
-    def detect_hallucination_patterns(self, entry: Dict) -> List[str]:
-        """
-        Detect common LLM hallucination patterns in citations (2025 CiteGuard).
-        Returns list of detected issues.
-        """
-        issues = []
-        title = entry.get('title', '')
+    def verify_url(self, url: str) -> Tuple[bool, Dict[str, object]]:
+        if not url:
+            return False, {"category": "no_url", "error": "No URL"}
 
+        head_ok, head_result = self._open_url(url, "HEAD")
+        if head_ok and head_result["status_code"] in SUCCESS_CODES:
+            head_result["verification_method"] = "HEAD"
+            return True, head_result
+
+        if head_result.get("status_code") in RECOVERABLE_HEAD_CODES:
+            get_ok, get_result = self._open_url(url, "GET")
+            if get_ok and get_result["status_code"] in SUCCESS_CODES:
+                get_result["verification_method"] = "GET"
+                get_result["category"] = "ok_after_head_failure"
+                get_result["head_error"] = head_result.get("error")
+                return True, get_result
+            return False, get_result
+
+        return False, head_result
+
+    def detect_hallucination_patterns(self, entry: Dict[str, Optional[str]]) -> List[str]:
+        issues: List[str] = []
+        title = entry.get("title") or ""
         if not title:
             return issues
 
-        # Check against suspicious patterns
         for pattern, description in self.suspicious_patterns:
             if re.match(pattern, title, re.IGNORECASE):
                 issues.append(f"Suspicious title pattern: {description}")
 
-        # Check for overly generic titles
-        generic_words = ['overview', 'introduction', 'guide', 'handbook', 'manual']
+        generic_words = ["overview", "introduction", "guide", "handbook", "manual"]
         if any(word in title.lower() for word in generic_words) and len(title.split()) < 5:
             issues.append("Very generic short title")
 
-        # Check for placeholder-like titles
-        if any(x in title.lower() for x in ['tbd', 'todo', 'placeholder', 'example']):
+        if any(word in title.lower() for word in ["tbd", "todo", "placeholder", "example"]):
             issues.append("Placeholder text in title")
 
-        # Check for inconsistent metadata
-        if entry.get('year'):
-            year = int(entry['year'])
-            # Very recent without DOI or URL is suspicious
-            if year >= 2024 and not entry.get('doi') and not entry.get('url'):
-                issues.append("Recent year (2024+) with no verification method")
-            # Future year is definitely wrong
-            if year > 2025:
-                issues.append(f"Future year: {year}")
-            # Very old with modern phrasing is suspicious
-            if year < 2000 and any(word in title.lower() for word in ['ai', 'llm', 'gpt', 'transformer']):
-                issues.append(f"Anachronistic: pre-2000 ({year}) citation mentioning modern AI terms")
+        year = entry.get("year")
+        if year:
+            year_int = int(year)
+            if year_int >= self.current_year - 1 and not entry.get("doi") and not entry.get("url"):
+                issues.append("Recent year with no DOI or URL")
+            if year_int > self.current_year:
+                issues.append(f"Future year: {year_int}")
+            if year_int < 2000 and any(term in title.lower() for term in ["ai", "llm", "gpt", "transformer"]):
+                issues.append(f"Anachronistic title for year {year_int}")
 
         return issues
 
     def check_title_similarity(self, title1: str, title2: str) -> float:
-        """
-        Simple title similarity check (word overlap).
-        Returns score 0.0-1.0
-        """
-        if not title1 or not title2:
-            return 0.0
-
-        # Normalize: lowercase, remove punctuation, split
-        def normalize(s):
-            s = s.lower()
-            s = re.sub(r'[^\w\s]', ' ', s)
-            return set(s.split())
+        def normalize(value: str) -> set[str]:
+            lowered = re.sub(r"[^\w\s]", " ", value.lower())
+            return set(lowered.split())
 
         words1 = normalize(title1)
         words2 = normalize(title2)
-
         if not words1 or not words2:
             return 0.0
+        return len(words1 & words2) / len(words1 | words2)
 
-        overlap = len(words1 & words2)
-        total = len(words1 | words2)
+    def verify_entry(self, entry: Dict[str, Optional[str]]) -> VerificationResult:
+        result = VerificationResult(num=entry["num"] or "?", category="unverified", status="unverified")
 
-        return overlap / total if total > 0 else 0.0
-
-    def verify_entry(self, entry: Dict) -> Dict:
-        """Verify a single bibliography entry (Enhanced 2025 with CiteGuard)"""
-        result = {
-            'num': entry['num'],
-            'status': 'unknown',
-            'issues': [],
-            'metadata': {},
-            'verification_methods': []
-        }
-
-        # STEP 1: Run hallucination detection (CiteGuard 2025)
         hallucination_issues = self.detect_hallucination_patterns(entry)
         if hallucination_issues:
-            result['issues'].extend(hallucination_issues)
-            result['status'] = 'suspicious'
+            result.issues.extend(hallucination_issues)
+            result.status = "suspicious"
+            result.category = "metadata_warning"
 
-        # STEP 2: Has DOI?
-        if entry['doi']:
-            print(f"  [{entry['num']}] Checking DOI {entry['doi']}...", end=' ')
-            success, metadata = self.verify_doi(entry['doi'])
+        doi = entry.get("doi")
+        if doi:
+            print(f"  [{result.num}] Checking DOI {doi}...", end=" ")
+            doi_ok, metadata = self.verify_doi(doi)
+            if doi_ok:
+                result.metadata = metadata
+                result.status = "verified"
+                result.category = "doi_verified"
+                result.verification_methods.append("DOI")
+                print("OK")
 
-            if success:
-                result['metadata'] = metadata
-                result['status'] = 'verified'
-                print("")
-
-                # Check title similarity if we have both
-                if entry['title'] and metadata.get('title'):
-                    similarity = self.check_title_similarity(
-                        entry['title'],
-                        metadata['title']
-                    )
-
+                if entry.get("title") and metadata.get("title"):
+                    similarity = self.check_title_similarity(entry["title"] or "", str(metadata["title"]))
                     if similarity < 0.5:
-                        result['issues'].append(
-                            f"Title mismatch (similarity: {similarity:.1%})"
-                        )
-                        result['status'] = 'suspicious'
+                        result.issues.append(f"Title mismatch (similarity {similarity:.1%})")
+                        result.status = "suspicious"
+                        result.category = "metadata_mismatch"
 
-                # Check year match
-                if entry['year'] and metadata.get('year'):
-                    if int(entry['year']) != int(metadata['year']):
-                        result['issues'].append(
+                if entry.get("year") and metadata.get("year"):
+                    if int(entry["year"]) != int(metadata["year"]):
+                        result.issues.append(
                             f"Year mismatch: report says {entry['year']}, DOI says {metadata['year']}"
                         )
-                        result['status'] = 'suspicious'
-
+                        result.status = "suspicious"
+                        result.category = "metadata_mismatch"
             else:
-                print(f"✗ {metadata.get('error', 'Failed')}")
-                result['status'] = 'unverified'
-                result['issues'].append(f"DOI resolution failed: {metadata.get('error', 'unknown')}")
+                print(f"FAILED ({metadata.get('error', 'unknown error')})")
+                result.issues.append(f"DOI resolution failed: {metadata.get('error', 'unknown error')}")
+                result.category = str(metadata.get("category", "doi_error"))
 
-        # STEP 3: Check URL accessibility (if no DOI or DOI failed)
-        if entry['url'] and result['status'] != 'verified':
-            url_ok, url_status = self.verify_url(entry['url'])
+        url = entry.get("url")
+        if url and result.status != "verified":
+            url_ok, url_result = self.verify_url(url)
             if url_ok:
-                result['verification_methods'].append('URL')
-                # Upgrade status if URL verifies
-                if result['status'] in ['unknown', 'no_doi', 'unverified']:
-                    result['status'] = 'url_verified'
-                print(f"  [{entry['num']}] URL accessible ✓")
+                method = str(url_result.get("verification_method", url_result.get("method", "URL")))
+                result.verification_methods.append(method)
+                result.status = "url_verified"
+                result.category = str(url_result.get("category", "url_verified"))
+                final_url = str(url_result.get("final_url", url))
+                print(f"  [{result.num}] URL accessible via {method} ({final_url})")
             else:
-                result['issues'].append(f"URL check failed: {url_status}")
+                category = str(url_result.get("category", "url_error"))
+                detail = str(url_result.get("error", "unknown error"))
+                result.issues.append(f"URL check failed [{category}]: {detail}")
+                result.category = category
 
-        # STEP 4: Final fallback - no verification method
-        if not entry['doi'] and not entry['url']:
-            if 'No DOI provided' not in ' '.join(result['issues']):
-                result['issues'].append("No DOI or URL - cannot verify")
-            result['status'] = 'suspicious'
+        if not doi and not url:
+            result.status = "suspicious"
+            result.category = "no_verification_path"
+            result.issues.append("No DOI or URL provided")
 
         return result
 
-    def verify_all(self):
-        """Verify all bibliography entries"""
-        print(f"\n{'='*60}")
+    def verify_all(self) -> bool:
+        print(f"\n{'=' * 60}")
         print(f"CITATION VERIFICATION: {self.report_path.name}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
         entries = self.extract_bibliography()
-
         if not entries:
-            print("L No bibliography entries found\n")
+            print("ERROR: no bibliography entries found")
             return False
 
         print(f"Found {len(entries)} citations\n")
 
-        results = []
+        results: List[VerificationResult] = []
         for entry in entries:
-            result = self.verify_entry(entry)
-            results.append(result)
+            results.append(self.verify_entry(entry))
+            time.sleep(0.1)
 
-            # Rate limiting
-            time.sleep(0.5)
+        doi_verified = [result for result in results if result.category == "doi_verified"]
+        url_verified = [result for result in results if result.status == "url_verified"]
+        suspicious = [result for result in results if result.status == "suspicious"]
+        unverified = [result for result in results if result.status == "unverified"]
 
-        # Summarize
-        print(f"\n{'='*60}")
-        print(f"VERIFICATION SUMMARY")
-        print(f"{'='*60}\n")
-
-        verified = [r for r in results if r['status'] == 'verified']
-        url_verified = [r for r in results if r['status'] == 'url_verified']
-        suspicious = [r for r in results if r['status'] == 'suspicious']
-        unverified = [r for r in results if r['status'] in ['unverified', 'no_doi', 'unknown']]
-
-        print(f'DOI Verified: {len(verified)}/{len(results)}')
-        print(f'URL Verified: {len(url_verified)}/{len(results)}')
-        print(f'Suspicious: {len(suspicious)}/{len(results)}')
-        print(f'Unverified: {len(unverified)}/{len(results)}')
+        print(f"\n{'=' * 60}")
+        print("VERIFICATION SUMMARY")
+        print(f"{'=' * 60}\n")
+        print(f"DOI Verified: {len(doi_verified)}/{len(results)}")
+        print(f"URL Verified: {len(url_verified)}/{len(results)}")
+        print(f"Suspicious: {len(suspicious)}/{len(results)}")
+        print(f"Unverified: {len(unverified)}/{len(results)}")
         print()
 
         if suspicious:
-            print('SUSPICIOUS CITATIONS (Manual Review Needed):')
-            for r in suspicious:
-                print(f"\n  [{r['num']}]")
-                for issue in r['issues']:
+            print("SUSPICIOUS CITATIONS (manual review recommended):")
+            for result in suspicious:
+                print(f"  [{result.num}] {result.category}")
+                for issue in result.issues:
                     print(f"    - {issue}")
             print()
 
-        if unverified and len(unverified) > 0:
-            print('UNVERIFIED CITATIONS (Could not check):')
-            for r in unverified:
-                print(f"  [{r['num']}] {r['issues'][0] if r['issues'] else 'Unknown'}")
+        if unverified:
+            print("UNVERIFIED CITATIONS (structured failure categories):")
+            for result in unverified:
+                issue = result.issues[0] if result.issues else "No details"
+                print(f"  [{result.num}] {result.category}: {issue}")
             print()
 
-        # Decision (Enhanced 2025 - includes URL-verified as acceptable)
-        total_verified = len(verified) + len(url_verified)
+        total_verified = len(doi_verified) + len(url_verified)
+        verified_fraction = total_verified / len(results)
 
-        if suspicious:
-            print('WARNING: Suspicious citations detected')
-            if self.strict_mode:
-                print('  STRICT MODE: Failing due to suspicious citations')
-                return False
-            else:
-                print('  (Continuing in non-strict mode)')
-
-        if self.strict_mode and unverified:
-            print('STRICT MODE: Unverified citations found')
+        if self.strict_mode and (suspicious or unverified):
+            print("STRICT MODE: failing due to suspicious or unverified citations")
             return False
 
-        if total_verified / len(results) < 0.5:
-            print('WARNING: Less than 50% citations verified')
-            return True  # Pass with warning
+        if verified_fraction < 0.5:
+            print("WARNING: less than 50% of citations verified directly")
         else:
-            print('CITATION VERIFICATION PASSED')
-            return True
+            print("CITATION VERIFICATION PASSED")
+
+        return True
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Verify citations in research report",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python verify_citations.py --report report.md
-
-Note: Requires internet connection to check DOIs.
-Uses free DOI resolver - no API key needed.
-        """
-    )
-
-    parser.add_argument(
-        '--report', '-r',
-        type=str,
-        required=True,
-        help='Path to research report markdown file'
-    )
-
-    parser.add_argument(
-        '--strict',
-        action='store_true',
-        help='Strict mode: fail on any unverified or suspicious citations'
-    )
-
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Verify citations in a markdown report")
+    parser.add_argument("--report", "-r", required=True, help="Path to markdown report")
+    parser.add_argument("--strict", action="store_true", help="Fail on any suspicious or unverified citation")
     args = parser.parse_args()
-    report_path = Path(args.report)
 
+    report_path = Path(args.report)
     if not report_path.exists():
-        print(f"ERROR: Report file not found: {report_path}")
-        sys.exit(1)
+        print(f"ERROR: report file not found: {report_path}")
+        return 1
 
     verifier = CitationVerifier(report_path, strict_mode=args.strict)
-    passed = verifier.verify_all()
-
-    sys.exit(0 if passed else 1)
+    return 0 if verifier.verify_all() else 1
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())
