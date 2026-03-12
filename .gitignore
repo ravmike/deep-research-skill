@@ -28,3 +28,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Packaging output
+dist/

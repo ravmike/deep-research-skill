@@ -27,9 +27,37 @@ A comprehensive research engine that brings Claude Desktop's Advanced Research c
 
 ## Installation
 
-The skill is already installed globally in `~/.claude/skills/deep-research/`
+Package the runtime skill files, then install the packaged output into Codex:
 
-No additional dependencies required for basic usage.
+```bash
+# Build the minimal export directory
+conda run -n codex python tools/package_skill.py
+
+# Optional: also create dist/deep-research.zip for GUI import
+conda run -n codex python tools/package_skill.py --zip
+```
+
+The packager intentionally exports only the runtime skill package:
+
+- `SKILL.md`
+- `agents/`
+- `reference/`
+- `scripts/`
+- `templates/`
+- `requirements.txt`
+
+It does not ship repo-only material such as `README.md`, `QUICK_START.md`, audits, or architecture notes.
+
+To install into Codex from the packaged directory:
+
+```bash
+rm -rf ~/.codex/skills/deep-research
+cp -R dist/deep-research ~/.codex/skills/deep-research
+```
+
+For GUI-style import, use `dist/deep-research.zip`.
+
+No third-party Python packages are required for the skill's own runtime scripts.
 
 ## Usage
 
@@ -51,16 +79,16 @@ Use deep research in ultradeep mode to compare PostgreSQL vs Supabase
 
 ```bash
 # Standard research
-python ~/.claude/skills/deep-research/research_engine.py --query "Your research question" --mode standard
+python ~/.codex/skills/deep-research/scripts/research_engine.py --query "Your research question" --mode standard
 
 # Deep research (all 8 phases)
-python ~/.claude/skills/deep-research/research_engine.py --query "Your research question" --mode deep
+python ~/.codex/skills/deep-research/scripts/research_engine.py --query "Your research question" --mode deep
 
 # Quick research (3 phases only)
-python ~/.claude/skills/deep-research/research_engine.py --query "Your research question" --mode quick
+python ~/.codex/skills/deep-research/scripts/research_engine.py --query "Your research question" --mode quick
 
 # Ultra-deep research (extended iterations)
-python ~/.claude/skills/deep-research/research_engine.py --query "Your research question" --mode ultradeep
+python ~/.codex/skills/deep-research/scripts/research_engine.py --query "Your research question" --mode ultradeep
 ```
 
 ## Research Modes
