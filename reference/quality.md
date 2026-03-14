@@ -51,6 +51,13 @@ If sources conflict:
 3. explain the likely reason for the disagreement if evidence allows
 4. do not force a false consensus
 
+For citation verification:
+
+- treat `HEAD` failures such as `403` or `405` as recoverable until a `GET` check also fails
+- distinguish broken citations from network failures and publisher blocking
+- when a publisher page blocks automation, prefer an alternate stable record such as PubMed or PMC if it identifies the same source
+- document any remaining unverifiable citations explicitly in the delivery notes
+
 ## Writing Standards
 
 The default style is dense, direct, and evidence-first prose.
@@ -97,6 +104,13 @@ Run this before delivery:
 python scripts/verify_citations.py --report [path]
 ```
 
+If the script reports partial failures, classify them before deciding the report is blocked:
+
+- `not_found`: likely broken citation
+- `network_error`: environment issue
+- `publisher_blocked` or `method_not_allowed`: try alternate URL or `GET` fallback
+- `metadata_mismatch`: manual review required
+
 ## Stop Rules
 
 Stop and report the issue when:
@@ -119,6 +133,7 @@ Every report should meet these thresholds unless the limitation is explicitly do
 
 - 10 or more sources for standard research
 - 3 or more sources behind major claims
+- all citations verified directly or documented as blocked-but-reviewed / alternate-verified
 - executive summary under 250 words
 - limitations section present
 - methodology appendix present

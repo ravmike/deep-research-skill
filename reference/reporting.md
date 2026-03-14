@@ -12,19 +12,19 @@
 
 ## Output Locations
 
-Create a dedicated folder in `~/Documents` for each project:
+Prefer a workspace-relative output folder when running inside a repo or workspace:
 
-- Pattern: `~/Documents/[TopicName]_Research_[YYYYMMDD]/`
+- Pattern: `./research_output/[topic_slug]_[YYYYMMDD]/`
 - Use a clean topic slug derived from the question.
 - Reuse the folder if it already exists.
+
+Only fall back to a home-directory location if no writable workspace context exists.
 
 Use one base filename across all artifacts:
 
 - `research_report_[YYYYMMDD]_[topic_slug].md`
 - `research_report_[YYYYMMDD]_[topic_slug].html`
 - `research_report_[YYYYMMDD]_[topic_slug].pdf`
-
-Also save a working markdown copy to `~/.claude/research_output/` for internal tracking and resumability.
 
 ## Required Artifacts
 
@@ -108,18 +108,20 @@ When resuming:
 
 ### HTML
 
-Use `scripts/md_to_html.py` to convert the markdown report into HTML content and place it into `templates/mckinsey_report_template.html`.
+Use `scripts/build_report.py` as the canonical packaging step.
+
+`scripts/md_to_html.py` is an internal fragment converter used by the builder. Do not hand-assemble HTML around it unless you are debugging the builder itself.
 
 Always:
 
 - preserve citation markers
-- extract 3-4 key quantitative metrics for the dashboard area
+- include 3-4 dashboard metrics derived from the report or passed in intentionally
 - verify the final HTML with `scripts/verify_html.py`
 
 Suggested flow:
 
 ```bash
-python scripts/md_to_html.py [markdown_report_path]
+python scripts/build_report.py [markdown_report_path]
 python scripts/verify_html.py --html [html_path] --md [md_path]
 ```
 
@@ -127,9 +129,9 @@ Open the HTML file after generation if the environment supports it.
 
 ### PDF
 
-Generate a PDF from the markdown or HTML artifact using the available PDF path in the current environment.
+Generate a PDF from the markdown or HTML artifact only if the current environment has a tested export path.
 
-If a dedicated PDF skill or export path exists, use it. If not, report that PDF generation could not be completed and still deliver the validated markdown and HTML artifacts.
+If a dedicated PDF skill or export path exists and has been tested in the current environment, use it. If not, report that PDF generation could not be completed and still deliver the validated markdown and HTML artifacts.
 
 ## Delivery Checklist
 
@@ -138,7 +140,7 @@ Before handing off:
 - markdown exists at the final path
 - HTML exists and passes `verify_html.py`
 - PDF exists, or its absence is explicitly reported
-- citation verification passes
+- citation verification passes directly or unresolved failures are classified and documented
 - report validation passes
 - artifact folder path is included in the user-facing response
 - source count and any important limitations are summarized in the response

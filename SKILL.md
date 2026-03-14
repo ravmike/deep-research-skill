@@ -48,37 +48,69 @@ Announce the chosen mode, expected time range, and target source count, then con
 
 ### 3. Retrieve
 
-Use a Tavily-first retrieval policy:
+Use a source-class retrieval policy, not a blanket Tavily-first rule:
 
-- `mcp__tavily__tavily_search` for the initial fan-out across 5-10 search angles
-- `mcp__tavily__tavily_extract` for high-value pages that need detailed extraction
-- `mcp__tavily__tavily_research` when the topic is broad, noisy, or benefits from a wider synthesis seed
-- `mcp__tavily__tavily_map` or `mcp__tavily__tavily_crawl` for site-structured investigations such as docs portals, standards sites, or regulators
+- Official guidelines, regulators, standards, and product docs:
+  - go directly to the official source when known
+  - otherwise use domain-targeted search first
+- Primary papers and formal reviews:
+  - prefer direct paper discovery and extraction over broad synthesis tools
+- Broad or noisy topics:
+  - use `mcp__tavily__tavily_search` for the initial fan-out across 5-10 search angles
+  - use `mcp__tavily__tavily_extract` for shortlisted high-value pages
+  - use `mcp__tavily__tavily_research` only as an escalation when search/extract is still too noisy or fragmented
+- Structured sites:
+  - use `mcp__tavily__tavily_map` or `mcp__tavily__tavily_crawl`
 
 Launch the initial Tavily searches in one assistant message with multiple tool calls. Do not run them sequentially unless the work is inherently dependent.
 
-Fallback to generic browsing only when Tavily is unavailable, blocked, or clearly insufficient for a specific source type.
+When retrieval fails, use this fallback order:
+1. retry with a narrower search or fewer filters
+2. remove unsupported or brittle parameters
+3. switch to official-source search
+4. switch to direct page extraction
+5. switch to generic browsing only when the above are insufficient
+
+Known tool quirks to account for during retrieval and verification:
+- Tavily parameters are strict and some values are rejected rather than ignored
+- broad synthesis calls can time out
+- some official and publisher pages block `HEAD` requests
+- some publisher pages block automated access and require alternate links such as PubMed or PMC
+
+Maintain a source ledger while retrieving. For every shortlisted source, track:
+- citation number
+- source type
+- URL
+- access status
+- verification status
+- publication date
+- major claims the source is meant to support
 
 Read [Complete Methodology](./reference/methodology.md) before running the full retrieval phase.
 
 ### 4. Verify
 
-Always run both validation steps before delivery:
+Always run report validation before delivery:
 
 ```bash
 python scripts/verify_citations.py --report [path]
 python scripts/validate_report.py --report [path]
 ```
 
-If either validation fails, fix and retry. After two failures on the same issue, stop and report the blocker instead of silently shipping a weak report.
+Treat citation verification as robust verification, not just script pass/fail:
+- if `verify_citations.py` reports blocked or unverified URLs, distinguish broken citations from network issues, publisher blocking, and `HEAD` false negatives
+- use alternate links such as PubMed or PMC when the primary publisher URL blocks automation
+- only ship with unresolved unverified citations if the limitation is explicitly documented
+
+If validation fails, fix and retry. After two failures on the same issue, stop and report the blocker instead of silently shipping a weak report.
 
 ### 5. Deliver
 
 Deliver a complete report, not loose notes:
 
 - save markdown as the primary source artifact
-- generate HTML from the markdown report
-- generate PDF if the current environment provides a working PDF path; otherwise state the limitation explicitly
+- generate HTML with `scripts/build_report.py`
+- generate PDF only if the current environment has a tested working export path; otherwise state the limitation explicitly at delivery time
 - tell the user where the files were written
 
 Read [Reporting and Delivery](./reference/reporting.md) before packaging output.
@@ -104,7 +136,8 @@ Use the bundled scripts when they match the task:
 - `scripts/verify_citations.py`: citation existence and metadata checks
 - `scripts/validate_report.py`: report structure and quality checks
 - `scripts/source_evaluator.py`: credibility scoring
-- `scripts/md_to_html.py`: markdown-to-HTML conversion
+- `scripts/md_to_html.py`: markdown-fragment conversion used by the builder
+- `scripts/build_report.py`: canonical markdown-to-HTML report builder
 - `scripts/verify_html.py`: HTML parity checks against markdown
 
 ## Progressive References
