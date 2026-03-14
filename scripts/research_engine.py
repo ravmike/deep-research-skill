@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Deep Research Engine for Claude Code
+Deep Research Engine for OpenClaw
 Orchestrates comprehensive research across multiple sources with verification and synthesis
 """
 
@@ -219,10 +219,10 @@ Your task: Systematically collect information from multiple sources
 7. Ensure source diversity (different domains, perspectives)
 
 ## Tools to Use:
-- mcp__tavily__tavily_search: Default tool for broad search fan-out
-- mcp__tavily__tavily_extract: Detailed extraction from shortlisted URLs
-- mcp__tavily__tavily_research: Broad synthesis seed for noisy topics
-- mcp__tavily__tavily_map / mcp__tavily__tavily_crawl: Site-structured investigations
+- tavily_search: Default tool for broad search fan-out
+- tavily_extract: Detailed extraction from shortlisted URLs
+- tavily_research: Broad synthesis seed for noisy topics
+- tavily_map / tavily_crawl: Site-structured investigations
 - Grep/Read: For local documentation if relevant
 - Task: Spawn 2-3 parallel retrieval agents for efficiency
 
@@ -526,7 +526,7 @@ Save report to file with timestamp.
 def main():
     """CLI entry point"""
     parser = argparse.ArgumentParser(
-        description="Deep Research Engine for Claude Code",
+        description="Deep Research Engine for OpenClaw",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -576,7 +576,7 @@ Examples:
     report_path = engine.run_pipeline(args.query)
 
     print(f"\nResearch complete! Report path: {report_path}")
-    print(f"\nNow Claude should execute each phase using the displayed instructions.")
+    print(f"\nNow the agent should execute each phase using the displayed instructions.")
 
 
 if __name__ == '__main__':

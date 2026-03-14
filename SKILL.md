@@ -56,11 +56,11 @@ Use a source-class retrieval policy, not a blanket Tavily-first rule:
 - Primary papers and formal reviews:
   - prefer direct paper discovery and extraction over broad synthesis tools
 - Broad or noisy topics:
-  - use `mcp__tavily__tavily_search` for the initial fan-out across 5-10 search angles
-  - use `mcp__tavily__tavily_extract` for shortlisted high-value pages
-  - use `mcp__tavily__tavily_research` only as an escalation when search/extract is still too noisy or fragmented
+  - use `tavily_search` for the initial fan-out across 5-10 search angles
+  - use `tavily_extract` for shortlisted high-value pages
+  - use `tavily_research` only as an escalation when search/extract is still too noisy or fragmented
 - Structured sites:
-  - use `mcp__tavily__tavily_map` or `mcp__tavily__tavily_crawl`
+  - use `tavily_map` or `tavily_crawl`
 
 Launch the initial Tavily searches in one assistant message with multiple tool calls. Do not run them sequentially unless the work is inherently dependent.
 

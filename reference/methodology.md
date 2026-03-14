@@ -90,16 +90,16 @@ Do not treat every topic as a Tavily fan-out problem.
 
 Use the narrowest Tavily tool that matches the step:
 
-- `mcp__tavily__tavily_search`
+- `tavily_search`
   - Default for the initial fan-out.
   - Use `query`, `topic`, `search_depth`, `max_results`, and date/domain filters as needed.
-- `mcp__tavily__tavily_extract`
+- `tavily_extract`
   - Use after shortlist creation.
   - Pull detailed page content from 5-10 promising URLs.
-- `mcp__tavily__tavily_research`
+- `tavily_research`
   - Use only after search/extract when the topic is still broad, noisy, or spans many subtopics.
   - Treat it as a synthesis seed, not as a replacement for independent verification.
-- `mcp__tavily__tavily_map` or `mcp__tavily__tavily_crawl`
+- `tavily_map` or `tavily_crawl`
   - Use for structured site exploration such as standards bodies, product docs, or agency portals.
 
 Fallback to generic browsing only if Tavily is unavailable or clearly cannot cover the needed source class.
@@ -138,10 +138,10 @@ If a retrieval step fails:
 
 ```text
 [Single assistant message with multiple tool calls]
-- mcp__tavily__tavily_search(query="quantum computing state of the art 2025", topic="general", search_depth="advanced", max_results=8, start_date="2024-01-01")
-- mcp__tavily__tavily_search(query="quantum computing limitations and failure modes", topic="general", search_depth="advanced", max_results=8)
-- mcp__tavily__tavily_search(query="quantum computing commercial adoption 2024 2025", topic="general", search_depth="advanced", max_results=8)
-- mcp__tavily__tavily_search(query="quantum error correction", topic="general", search_depth="advanced", max_results=8, include_domains=["arxiv.org", "nature.com", "science.org"])
+- tavily_search(query="quantum computing state of the art 2025", topic="general", search_depth="advanced", max_results=8, start_date="2024-01-01")
+- tavily_search(query="quantum computing limitations and failure modes", topic="general", search_depth="advanced", max_results=8)
+- tavily_search(query="quantum computing commercial adoption 2024 2025", topic="general", search_depth="advanced", max_results=8)
+- tavily_search(query="quantum error correction", topic="general", search_depth="advanced", max_results=8, include_domains=["arxiv.org", "nature.com", "science.org"])
 - Task(subagent_type="general-purpose", description="Academic analysis", prompt="Review 2024-2025 quantum computing papers and extract methods, benchmarks, and limits.")
 - Task(subagent_type="general-purpose", description="Industry analysis", prompt="Review commercial adoption, vendor claims, and customer evidence for quantum computing.")
 ```
@@ -149,7 +149,7 @@ If a retrieval step fails:
 ### Example Extraction Batch
 
 ```text
-- mcp__tavily__tavily_extract(
+- tavily_extract(
     urls=["https://example.com/source-1", "https://example.com/source-2"],
     format="markdown",
     extract_depth="advanced",
